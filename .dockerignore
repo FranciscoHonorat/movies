@@ -1,0 +1,25 @@
+# Go build artifacts
+*.o
+*.a
+*.so
+.DS_Store
+out/
+*.exe
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependencies
+vendor/
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local

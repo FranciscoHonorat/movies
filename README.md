@@ -836,7 +836,7 @@ FROM alpine:latest
 
 ## 📞 Contato e Suporte
 
-- **Email**: support@movies-api.local
+- **Email**: jeffhonorato230@gmail.com
 - **GitHub Issues**: [Abrir issue](https://github.com/FranciscoHonorat/movies/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/FranciscoHonorat/movies/discussions)
 

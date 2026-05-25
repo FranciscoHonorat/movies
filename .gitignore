@@ -1,0 +1,29 @@
+# Go
+*.o
+*.a
+*.so
+*.out
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+bin/
+dist/
+
+# Logs
+*.log
+
+# Docker
+docker-compose.override.yml

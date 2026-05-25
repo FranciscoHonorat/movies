@@ -5,6 +5,7 @@ import (
 	"os"
 
 	_ "github.com/FranciscoHonorat/movies/api-gateway/docs"
+	"github.com/FranciscoHonorat/movies/api-gateway/internal/adapters/rabbitmq"
 	"github.com/FranciscoHonorat/movies/api-gateway/internal/handlers"
 	"github.com/FranciscoHonorat/movies/proto"
 	"github.com/gin-gonic/gin"
@@ -33,8 +34,11 @@ func main() {
 	}
 
 	client := proto.NewMovieServiceClient(conn)
-
-	movieHandler := handlers.NewMovieHandler(client)
+	newRabbitMQPublisher, err := rabbitmq.NewRabbitMQPublisher(os.Getenv("RABBITMQ_URI"), "movies_queue")
+	if err != nil {
+		log.Fatal(err)
+	}
+	movieHandler := handlers.NewMovieHandler(client, newRabbitMQPublisher)
 
 	r := gin.Default()
 

@@ -3,7 +3,6 @@
 *.a
 *.so
 *.out
-vendor/
 
 # IDE
 .vscode/

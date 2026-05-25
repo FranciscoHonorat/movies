@@ -9,10 +9,8 @@ RUN apk add --no-cache git
 # Copiar código fonte
 COPY . .
 
-RUN go mod download
-
 # Build da aplicação
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./movies-service/cmd
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o /app/server ./movies-service/cmd
 
 # Runtime stage
 FROM alpine:latest

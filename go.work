@@ -4,4 +4,5 @@ use (
 	./api-gateway
 	./movies-service
 	./proto
+	./shared
 )

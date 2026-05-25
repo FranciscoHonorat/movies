@@ -8,7 +8,9 @@ import (
 
 	grpcserver "github.com/FranciscoHonorat/movies/movies-service/internal/adapters/grpc_server"
 	"github.com/FranciscoHonorat/movies/movies-service/internal/adapters/mongodb"
+	"github.com/FranciscoHonorat/movies/movies-service/internal/adapters/rabbitmq"
 	"github.com/FranciscoHonorat/movies/movies-service/internal/adapters/seed"
+	"github.com/FranciscoHonorat/movies/movies-service/internal/core/domain"
 	"github.com/FranciscoHonorat/movies/movies-service/internal/core/service"
 	"github.com/FranciscoHonorat/movies/proto"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -39,6 +41,15 @@ func main() {
 
 	repo := mongodb.NewMongoRepository(collection)
 	svc := service.NewMovieService(repo)
+
+	rabbitmqConsumer, err := rabbitmq.NewRabbitMQConsumer(os.Getenv("RABBITMQ_URI"), "movies_queue")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go rabbitmqConsumer.Consume(ctx, func(movie domain.Movie) error {
+		_, err := svc.CreateMovie(ctx, &movie)
+		return err
+	})
 
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {

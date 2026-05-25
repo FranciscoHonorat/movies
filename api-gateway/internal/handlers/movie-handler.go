@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/FranciscoHonorat/movies/api-gateway/internal/ports/output"
 	"github.com/FranciscoHonorat/movies/proto"
+	"github.com/FranciscoHonorat/movies/shared"
 	"github.com/gin-gonic/gin"
 )
 
 type MovieHandler struct {
-	client proto.MovieServiceClient
+	client    proto.MovieServiceClient
+	publisher output.MoviePublisher
 }
 
 type CreateMovieStruct struct {
@@ -27,8 +30,8 @@ type ListMovieStruct struct {
 
 // NewMovieHandler cria uma nova instância de MovieHandler
 // Inicializa o handler com um cliente gRPC para communicação com o Movies Service
-func NewMovieHandler(client proto.MovieServiceClient) *MovieHandler {
-	return &MovieHandler{client: client}
+func NewMovieHandler(client proto.MovieServiceClient, publisher output.MoviePublisher) *MovieHandler {
+	return &MovieHandler{client: client, publisher: publisher}
 }
 
 // GetMovie godoc
@@ -135,7 +138,7 @@ func (m *MovieHandler) ListMovie(c *gin.Context) {
 // @Param        body  body      CreateMovieStruct  true   "Dados do novo filme"
 // @Accept       json
 // @Produce      json
-// @Success      201  {object}  map[string]interface{}               "Filme criado com sucesso"
+// @Success      202  {object}  map[string]interface{}               "Filme criado com sucesso"
 // @Failure      400  {object}  map[string]string                    "Dados inválidos ou campos obrigatórios faltando"
 // @Failure      500  {object}  map[string]string                    "Erro interno do servidor"
 // @Router       /movies [post]
@@ -145,22 +148,17 @@ func (m *MovieHandler) CreateMovie(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON or missing required fields"})
 		return
 	}
-
-	movieInput := proto.CreateMovieRequest{
+	err := m.publisher.Publish(c.Request.Context(), shared.MoviePublisherMessage{
 		Title: req.Title,
 		Year:  req.Year,
-	}
-
-	createMovie, err := m.client.CreateMovie(c.Request.Context(), &movieInput)
-
+	})
 	if err != nil {
 		slog.Error("CreateMovie error", slog.Any("error", err))
-		c.JSON(grpcErrorToHTTP(err), gin.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, createMovie)
-
+	c.JSON(http.StatusAccepted, gin.H{"message": "Movie creation accepted"})
 }
 
 // DeleteMovie godoc

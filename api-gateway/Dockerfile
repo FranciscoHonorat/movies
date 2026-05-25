@@ -9,11 +9,9 @@ RUN apk add --no-cache git
 # Copiar código fonte
 COPY . .
 
-# Download dependências
-RUN go mod download
 
 # Build da aplicação
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./api-gateway/cmd
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o /app/server ./api-gateway/cmd
 
 # Runtime stage
 FROM alpine:latest

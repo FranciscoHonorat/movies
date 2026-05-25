@@ -23,6 +23,25 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: movies-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - movies-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # Movies Service (gRPC)
   movies-service:
     build:
@@ -34,8 +53,11 @@ services:
     environment:
       MONGO_URI: mongodb://root:password@mongo:27017/movies?authSource=admin
       GRPC_PORT: "50051"
+      RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       mongo:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - movies-network
@@ -52,9 +74,12 @@ services:
     environment:
       GRPC_SERVER_URL: movies-service:50051
       HTTP_PORT: "8080"
+      RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       movies-service:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     networks:
       - movies-network
     restart: unless-stopped

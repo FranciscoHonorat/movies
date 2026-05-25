@@ -542,6 +542,130 @@ docker compose up -d --build
 
 ---
 
+## ☸️ Kubernetes
+
+### Pré-requisitos
+
+- `kubectl` instalado e configurado
+- Cluster Kubernetes rodando (Docker Desktop, Minikube, Kind, etc.)
+- Imagens Docker dos serviços disponíveis (pushed para registry ou carregadas localmente)
+
+### Manifests
+
+Os manifests Kubernetes estão localizados em `k8s/`:
+
+```
+k8s/
+├── api-gateway-deployment.yaml      # Deployment do API Gateway
+├── api-gateway-service.yaml         # Service do API Gateway
+├── movies-service-deployment.yaml   # Deployment do Movies Service
+├── movies-service-service.yaml      # Service do Movies Service
+├── mongodb-deployment.yaml          # Deployment do MongoDB
+├── mongodb-service.yaml             # Service do MongoDB
+└── mongodb-pvc.yaml                 # PersistentVolumeClaim para MongoDB
+```
+
+### Deploy no Kubernetes
+
+#### 1. Aplicar todos os manifests
+
+```bash
+kubectl apply -f k8s/
+```
+
+Este comando cria:
+- Deployments para API Gateway, Movies Service e MongoDB
+- Services para exposição dos serviços
+- PersistentVolumeClaim para persistência de dados do MongoDB
+
+#### 2. Verificar o status
+
+```bash
+# Ver pods
+kubectl get pods
+
+# Ver services
+kubectl get svc
+
+# Ver deployments
+kubectl get deployments
+
+# Ver volumes
+kubectl get pvc
+```
+
+#### 3. Acessar os serviços
+
+```bash
+# Port-forward API Gateway (local)
+kubectl port-forward svc/api-gateway 8080:8080
+
+# Port-forward MongoDB (local)
+kubectl port-forward svc/mongodb 27017:27017
+
+# Acessar Swagger
+http://localhost:8080/swagger/index.html
+
+# Acessar API
+http://localhost:8080/api/v1/movies
+```
+
+#### 4. Ver logs
+
+```bash
+# Logs do API Gateway
+kubectl logs -l app=api-gateway -f
+
+# Logs do Movies Service
+kubectl logs -l app=movies-service -f
+
+# Logs do MongoDB
+kubectl logs -l app=mongodb -f
+```
+
+#### 5. Deletar recursos
+
+```bash
+# Remover tudo
+kubectl delete -f k8s/
+
+# Ou remover seletivamente
+kubectl delete deployment api-gateway
+kubectl delete service api-gateway
+```
+
+### Configuração de Imagens
+
+Antes de aplicar os manifests, certifique-se que as imagens estão disponíveis:
+
+```bash
+# Build das imagens
+docker build -t api-gateway:latest api-gateway/
+docker build -t movies-service:latest movies-service/
+
+# Se usar um registry (ex: Docker Hub)
+docker tag api-gateway:latest seu-usuario/api-gateway:latest
+docker push seu-usuario/api-gateway:latest
+
+docker tag movies-service:latest seu-usuario/movies-service:latest
+docker push seu-usuario/movies-service:latest
+```
+
+### Variáveis de Ambiente no Kubernetes
+
+Os Deployments usam ConfigMaps e Secrets para variáveis de ambiente:
+
+```yaml
+# Exemplo no deployment
+env:
+  - name: GRPC_SERVER_URL
+    value: "movies-service:50051"
+  - name: MONGODB_URI
+    value: "mongodb://root:password@mongodb:27017/movies_db"
+```
+
+---
+
 ## 🔍 Troubleshooting
 
 ### Problema: Conexão recusada com MongoDB

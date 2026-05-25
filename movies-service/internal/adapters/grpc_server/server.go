@@ -21,7 +21,7 @@ func NewGrpcServer(service input.MovieService) *GrpcServer {
 func (s *GrpcServer) GetMovie(ctx context.Context, req *proto.GetMovieRequest) (*proto.GetMovieResponse, error) {
 	movie, err := s.service.GetMovie(ctx, req.Id)
 	if err != nil {
-		return nil, err
+		return nil, toGRPCError(err)
 	}
 
 	return &proto.GetMovieResponse{
@@ -36,15 +36,16 @@ func (s *GrpcServer) GetMovie(ctx context.Context, req *proto.GetMovieRequest) (
 func (s *GrpcServer) CreateMovie(ctx context.Context, req *proto.CreateMovieRequest) (*proto.CreateMovieResponse, error) {
 	movie, err := domain.NewMovie(req.Title, req.Year)
 	if err != nil {
-		return nil, err
+		return nil, toGRPCError(err)
 	}
 
 	created, err := s.service.CreateMovie(ctx, movie)
 	if err != nil {
-		return nil, err
+		return nil, toGRPCError(err)
 	}
 	return &proto.CreateMovieResponse{
 		Movie: &proto.Movie{
+			Id:    created.ID,
 			Title: created.Title,
 			Year:  created.Year,
 		},
@@ -65,7 +66,7 @@ func (s *GrpcServer) ListMovie(ctx context.Context, req *proto.ListMovieRequest)
 	}
 	movies, _, err := s.service.ListMovies(ctx, filters, pagination, sorting)
 	if err != nil {
-		return nil, err
+		return nil, toGRPCError(err)
 	}
 
 	var protoMovies []*proto.Movie
@@ -82,7 +83,7 @@ func (s *GrpcServer) ListMovie(ctx context.Context, req *proto.ListMovieRequest)
 func (s *GrpcServer) DeleteMovie(ctx context.Context, req *proto.DeleteMovieRequest) (*proto.DeleteMovieResponse, error) {
 	err := s.service.DeleteMovie(ctx, req.Id)
 	if err != nil {
-		return nil, err
+		return nil, toGRPCError(err)
 	}
 	return &proto.DeleteMovieResponse{Success: true}, nil
 }

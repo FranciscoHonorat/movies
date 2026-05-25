@@ -58,12 +58,26 @@ func (m *MongoMovieRepository) GetMovie(ctx context.Context, id int32) (*domain.
 }
 
 func (m *MongoMovieRepository) CreateMovie(ctx context.Context, movie *domain.Movie) (*domain.Movie, error) {
+	opts := options.FindOne().SetSort(bson.D{{Key: "_id", Value: -1}})
+	var lastDoc movieDocument
+	err := m.collection.FindOne(ctx, bson.D{}, opts).Decode(&lastDoc)
+	var nextID int32
+
+	if err == mongo.ErrNoDocuments {
+		nextID = 1
+	} else if err != nil {
+		return nil, domain.ErrInternalServer
+	} else {
+		nextID = lastDoc.ID + 1
+	}
+
+	movie.ID = nextID
 	doc := toDocument(movie)
-	_, err := m.collection.InsertOne(ctx, doc)
+
+	_, err = m.collection.InsertOne(ctx, doc)
 	if err != nil {
 		return nil, domain.ErrInternalServer
 	}
-
 	return toDomain(doc), nil
 }
 

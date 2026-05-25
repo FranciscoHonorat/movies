@@ -25,10 +25,24 @@ type ListMovieStruct struct {
 	Total int32          `json:"total"`
 }
 
+// NewMovieHandler cria uma nova instância de MovieHandler
+// Inicializa o handler com um cliente gRPC para communicação com o Movies Service
 func NewMovieHandler(client proto.MovieServiceClient) *MovieHandler {
 	return &MovieHandler{client: client}
 }
 
+// GetMovie godoc
+// @Summary      Obter filme por ID
+// @Description  Recupera os detalhes completos de um filme específico usando seu ID
+// @Tags         Movies
+// @Param        id   path      int     true   "ID do filme"  minimum(1)
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}               "Filme encontrado"
+// @Failure      400  {object}  map[string]string                    "ID inválido"
+// @Failure      404  {object}  map[string]string                    "Filme não encontrado"
+// @Failure      500  {object}  map[string]string                    "Erro interno do servidor"
+// @Router       /movies/{id} [get]
 func (m *MovieHandler) GetMovie(c *gin.Context) {
 	idStr := c.Param("id")
 	if idStr == "" {
@@ -45,19 +59,34 @@ func (m *MovieHandler) GetMovie(c *gin.Context) {
 	movie, err := m.client.GetMovie(c.Request.Context(), &proto.GetMovieRequest{Id: int32(idInt)})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		c.JSON(grpcErrorToHTTP(err), gin.H{"error": "Internal server error"})
 		return
 	}
 
 	c.JSON(http.StatusOK, movie)
 }
 
+// ListMovie godoc
+// @Summary      Listar filmes
+// @Description  Retorna uma lista paginada de filmes com suporte a filtragem, ordenação e busca
+// @Tags         Movies
+// @Param        title  query     string  false  "Filtro por título (busca parcial)"
+// @Param        year   query     string  false  "Filtro por ano de lançamento"
+// @Param        page   query     int     false  "Número da página"                    default(1)     minimum(1)
+// @Param        limit  query     int     false  "Quantidade de filmes por página"     default(10)    minimum(1)  maximum(100)
+// @Param        sort   query     string  false  "Campo para ordenação"                default(title) enums(title,year)
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}               "Lista de filmes recuperada com sucesso"
+// @Failure      400  {object}  map[string]string                    "Parâmetros inválidos"
+// @Failure      500  {object}  map[string]string                    "Erro interno do servidor"
+// @Router       /movies [get]
 func (m *MovieHandler) ListMovie(c *gin.Context) {
 	title := c.Query("title")
 	year := c.Query("year")
 	page := c.DefaultQuery("page", "1")
 	limit := c.DefaultQuery("limit", "10")
-	sort := c.DefaultQuery("title", "year")
+	sort := c.DefaultQuery("sort", "title")
 
 	pageInt, err := strconv.Atoi(page)
 	if err != nil || pageInt < 1 {
@@ -86,7 +115,7 @@ func (m *MovieHandler) ListMovie(c *gin.Context) {
 
 	resp, err := m.client.ListMovie(c.Request.Context(), &listReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		c.JSON(grpcErrorToHTTP(err), gin.H{"error": "Internal server error"})
 		return
 	}
 
@@ -99,6 +128,17 @@ func (m *MovieHandler) ListMovie(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// CreateMovie godoc
+// @Summary      Criar novo filme
+// @Description  Cria um novo filme no banco de dados com os dados fornecidos
+// @Tags         Movies
+// @Param        body  body      CreateMovieStruct  true   "Dados do novo filme"
+// @Accept       json
+// @Produce      json
+// @Success      201  {object}  map[string]interface{}               "Filme criado com sucesso"
+// @Failure      400  {object}  map[string]string                    "Dados inválidos ou campos obrigatórios faltando"
+// @Failure      500  {object}  map[string]string                    "Erro interno do servidor"
+// @Router       /movies [post]
 func (m *MovieHandler) CreateMovie(c *gin.Context) {
 	var req CreateMovieStruct
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -115,7 +155,7 @@ func (m *MovieHandler) CreateMovie(c *gin.Context) {
 
 	if err != nil {
 		slog.Error("CreateMovie error", slog.Any("error", err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		c.JSON(grpcErrorToHTTP(err), gin.H{"error": "Internal server error"})
 		return
 	}
 
@@ -123,6 +163,18 @@ func (m *MovieHandler) CreateMovie(c *gin.Context) {
 
 }
 
+// DeleteMovie godoc
+// @Summary      Deletar filme
+// @Description  Remove permanentemente um filme do banco de dados
+// @Tags         Movies
+// @Param        id   path      int     true   "ID do filme a deletar"  minimum(1)
+// @Accept       json
+// @Produce      json
+// @Success      204                                                     "Filme deletado com sucesso"
+// @Failure      400  {object}  map[string]string                    "ID inválido"
+// @Failure      404  {object}  map[string]string                    "Filme não encontrado"
+// @Failure      500  {object}  map[string]string                    "Erro interno do servidor"
+// @Router       /movies/{id} [delete]
 func (m *MovieHandler) DeleteMovie(c *gin.Context) {
 	idStr := c.Param("id")
 	if idStr == "" {
@@ -139,7 +191,7 @@ func (m *MovieHandler) DeleteMovie(c *gin.Context) {
 	_, err = m.client.DeleteMovie(c.Request.Context(), &proto.DeleteMovieRequest{Id: int32(idInt)})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		c.JSON(grpcErrorToHTTP(err), gin.H{"error": "Internal server error"})
 		return
 	}
 

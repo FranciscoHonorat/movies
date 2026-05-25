@@ -25,3 +25,5 @@ spec:
               value: "movies-service:50051"
             - name: HTTP_PORT
               value: "8080"
+            - name: RABBITMQ_URI
+              value: amqp://guest:guest@rabbitmq-service:5672/

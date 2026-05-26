@@ -54,7 +54,12 @@ services:
       MONGO_URI: mongodb://root:password@mongo:27017/movies?authSource=admin
       GRPC_PORT: "50051"
       RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
+      DYNAMODB_ENDPOINT: http://localstack:4566
+      AWS_ACCESS_KEY_ID: "test"
+      AWS_SECRET_ACCESS_KEY: "test"
     depends_on:
+      localstack:
+        condition: service_healthy
       mongo:
         condition: service_healthy
       rabbitmq:
@@ -83,6 +88,25 @@ services:
     networks:
       - movies-network
     restart: unless-stopped
+
+    # LocalStack
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb
+      - DEFAULT_REGION=us-east-1
+      - DATA_DIR=/tmp/localstack/data
+    networks:
+      - movies-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mongo_data:

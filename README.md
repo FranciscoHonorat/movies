@@ -1,877 +1,398 @@
-# 🎬 Movies API - Microserviços em Go
+# 🎬 Movies API — Microserviços em Go
 
-Uma arquitetura de microserviços robusta e escalável para gerenciar uma coleção de filmes. Implementada com **Go**, **Gin Framework**, **gRPC**, **MongoDB** e **Docker**.
+API REST de filmes construída com arquitetura de microserviços em **Go**, usando **Gin**, **gRPC + Protobuf**, **MongoDB**, **DynamoDB (LocalStack)**, **RabbitMQ** e **Docker**.
+
+---
 
 ## 📋 Visão Geral
 
-Este projeto demonstra as melhores práticas de desenvolvimento de microserviços em Go, incluindo:
+O projeto implementa um CRUD de filmes distribuído em dois microserviços que se comunicam via gRPC. Além dos requisitos obrigatórios, foram implementados os três extras opcionais do desafio:
 
-- ✅ **Arquitetura de Microserviços** - API Gateway + Movies Service
-- ✅ **Comunicação gRPC** - Entre serviços
-- ✅ **REST API** - Interface pública com Gin
-- ✅ **Banco de Dados** - MongoDB
-- ✅ **Containerização** - Docker e Docker Compose
-- ✅ **Documentação** - Swagger/OpenAPI 3.0
-- ✅ **Testes Unitários** - Testes automatizados
-- ✅ **Logging Estruturado** - slog
+- ✅ **Arquitetura Hexagonal** — domain, ports e adapters isolados
+- ✅ **Microserviços** — API Gateway (HTTP) + Movies Service (gRPC)
+- ✅ **gRPC + Protobuf** — comunicação tipada entre serviços
+- ✅ **MongoDB** — persistência principal
+- ✅ **Docker Compose** — inicialização com um único comando
+- ✅ **Swagger** — documentação interativa em `/swagger/index.html`
+- ✅ **Testes Unitários** — 20 testes (domain sem mock, service com mock, gRPC table-driven)
+- ✅ **Event Driven (RabbitMQ)** — `POST /movies` assíncrono com retorno `202 Accepted`
+- ✅ **Kubernetes** — 7 manifestos prontos em `k8s/`
+- ✅ **LocalStack + DynamoDB** — substituto emulado do MongoDB via AWS SDK
+
+---
 
 ## 🏗️ Arquitetura
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Cliente (HTTP)                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP/JSON
-                       │ :8080
-┌──────────────────────▼──────────────────────────────────────┐
-│              API Gateway (Gin)                              │
-│  - REST Endpoints                                           │
-│  - Request/Response handling                               │
-│  - gRPC Client                                             │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ gRPC
-                       │ :50051
-┌──────────────────────▼──────────────────────────────────────┐
-│         Movies Service (gRPC Server)                        │
-│  - Business Logic                                           │
-│  - Data Persistence                                         │
-│  - Validations                                              │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Driver
-                       │ :27017
-┌──────────────────────▼──────────────────────────────────────┐
-│              MongoDB Database                               │
-│  - movies_db database                                       │
-│  - Persistent storage                                       │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│                  Cliente (HTTP)                 │
+└────────────────────┬────────────────────────────┘
+                     │ HTTP :8080
+┌────────────────────▼────────────────────────────┐
+│              API Gateway (Gin)                  │
+│  - REST endpoints                               │
+│  - gRPC client                                  │
+│  - RabbitMQ producer (POST assíncrono)          │
+└──────────┬──────────────────────┬───────────────┘
+           │ gRPC :50051          │ AMQP :5672
+           │                     │ (apenas POST)
+┌──────────▼──────────┐  ┌───────▼───────────────┐
+│   Movies Service    │  │       RabbitMQ         │
+│   (gRPC Server)     │◄─┤  fila: movies.create  │
+│   - regras negócio  │  └───────────────────────┘
+│   - RabbitMQ consumer                           │
+└──────────┬──────────┘
+           │ Driver :27017 / :4566
+┌──────────▼──────────┐
+│  MongoDB / DynamoDB │
+│  (LocalStack)       │
+└─────────────────────┘
 ```
 
-### Componentes
+### Como o fluxo assíncrono funciona
 
-#### 1. **API Gateway** 🚪
-- Framework: Gin (HTTP)
-- Porta: `8080`
-- Função: Expõe endpoints REST para clientes
-- Comunica com Movies Service via gRPC
-- Localização: `api-gateway/`
+Os endpoints `GET`, `GET /{id}` e `DELETE` são **síncronos** — o api-gateway chama o movies-service via gRPC e aguarda a resposta.
 
-#### 2. **Movies Service** 🎥
-- Protocolo: gRPC
-- Porta: `50051`
-- Função: Lógica de negócio e persistência
-- Conecta ao MongoDB
-- Localização: `movies-service/`
-
-#### 3. **Proto Definitions** 📝
-- Define as mensagens gRPC
-- Define o serviço gRPC
-- Localização: `proto/`
-
-#### 4. **MongoDB** 🗄️
-- Versão: 8.0
-- Banco: `movies_db`
-- Porta: `27017`
-- Username: `root`
-- Password: `password`
+O `POST /movies` é **assíncrono**:
+1. O api-gateway publica a mensagem na fila `movies.create` do RabbitMQ
+2. Retorna `202 Accepted` imediatamente (sem esperar o banco)
+3. O movies-service consome a fila em background (goroutine) e persiste o filme
 
 ---
 
-## 🚀 Início Rápido
+## 🗂️ Estrutura do Projeto
+
+```
+movies/
+├── go.work                          # Workspace Go — conecta os módulos localmente
+├── go.work.sum
+├── docker-compose.yml               # Sobe tudo com um comando
+├── .dockerignore
+│
+├── proto/                           # Módulo compartilhado de contrato gRPC
+│   ├── movies.proto                 # Definição do serviço e mensagens
+│   ├── movies.pb.go                 # Gerado pelo protoc
+│   ├── movies_grpc.pb.go            # Gerado pelo protoc
+│   └── go.mod
+│
+├── shared/                          # DTO compartilhado para mensageria
+│   ├── movie_message.go             # MoviePublisherMessage (RabbitMQ)
+│   └── go.mod
+│
+├── api-gateway/                     # Serviço HTTP — porta de entrada
+│   ├── cmd/main.go
+│   ├── internal/
+│   │   └── adapters/
+│   │       ├── handlers/
+│   │       │   ├── movie_handler.go
+│   │       │   └── health.go
+│   │       ├── errors.go            # Mapeia gRPC codes → HTTP status
+│   │       └── rabbitmq/
+│   │           └── publisher.go     # Publica mensagens na fila
+│   ├── docs/                        # Swagger gerado pelo swag
+│   ├── go.mod
+│   └── Dockerfile
+│
+├── movies-service/                  # Serviço de negócio — gRPC + banco
+│   ├── cmd/main.go
+│   ├── internal/
+│   │   ├── core/
+│   │   │   ├── domain/
+│   │   │   │   ├── movie.go         # Entidade Movie + validação
+│   │   │   │   └── errors.go        # ErrMovieNotFound, ErrInvalidMovieData...
+│   │   │   ├── ports/
+│   │   │   │   ├── input/           # Interface MovieService (o que o service expõe)
+│   │   │   │   └── output/          # Interface MovieRepository (o que o service precisa)
+│   │   │   └── service/
+│   │   │       └── movie_service.go # Lógica de negócio (não conhece MongoDB nem gRPC)
+│   │   └── adapters/
+│   │       ├── grpc_server/
+│   │       │   ├── server.go        # Implementa o servidor gRPC
+│   │       │   ├── errors.go        # Mapeia domain errors → gRPC codes
+│   │       │   └── errors_test.go   # Testes table-driven do mapeamento de erros
+│   │       ├── mongodb/
+│   │       │   └── movie_repo.go    # Implementa MovieRepository com MongoDB
+│   │       ├── dynamodb/
+│   │       │   └── movie_repo.go    # Implementa MovieRepository com DynamoDB
+│   │       ├── seed/
+│   │       │   ├── seed.go          # Seed MongoDB (movies.json → banco)
+│   │       │   └── dynamodb_seed.go # Seed DynamoDB (movies.json → banco)
+│   │       └── rabbitmq/
+│   │           └── consumer.go      # Consome fila movies.create em background
+│   ├── movies.json                  # Dados iniciais (250 filmes)
+│   ├── go.mod
+│   └── Dockerfile
+│
+└── k8s/                             # Manifestos Kubernetes
+    ├── api-gateway-deployment.yaml
+    ├── api-gateway-service.yaml
+    ├── movies-service-deployment.yaml
+    ├── movies-service-service.yaml
+    ├── mongodb-deployment.yaml
+    ├── mongodb-service.yaml
+    └── mongodb-pvc.yaml
+```
+
+---
+
+## 🚀 Inicialização
 
 ### Pré-requisitos
 
-- **Go** 1.21.0 ou superior
 - **Docker** e **Docker Compose**
-- **Git**
-- Opcionais:
-  - `swag` para regenerar documentação Swagger
-  - `protoc` para recompilar proto files
+- **Go 1.25+** (apenas se quiser rodar localmente sem Docker)
 
-### Instalação
-
-#### 1. Clonar o repositório
+### Subir com Docker Compose (recomendado)
 
 ```bash
 git clone https://github.com/FranciscoHonorat/movies.git
 cd movies
+
+# Build dos serviços (necessário na primeira vez)
+docker compose build movies-service
+docker compose build api-gateway
+
+# Subir tudo
+docker compose up
 ```
 
-#### 2. Instalar dependências Go
+> **Por que buildar separadamente?** O contexto de build do movies-service inclui o diretório `vendor/` (~84MB). Buildar em paralelo pode causar EOF no Docker Desktop ao transferir dois contextos grandes ao mesmo tempo.
+
+Após subir, os serviços ficam disponíveis em:
+- API REST: `http://localhost:8080`
+- Swagger: `http://localhost:8080/swagger/index.html`
+- MongoDB: `localhost:27017`
+- RabbitMQ Management: `http://localhost:15672` (guest/guest)
+
+O banco é populado automaticamente com os filmes do `movies.json` na primeira inicialização.
+
+### Parar os serviços
 
 ```bash
-# Baixar todas as dependências
-go mod download
-
-# (Opcional) Atualizar dependências
-go mod tidy
-```
-
-#### 3. Dependências estão prontas
-
-As variáveis de ambiente estão configuradas no `docker-compose.yml`.
-
-### Executar com Docker Compose
-
-#### Build e Start dos serviços
-
-```bash
-# Build de todas as imagens
-docker compose build
-
-# Start dos serviços
-docker compose up -d
-
-# Ver logs em tempo real
-docker compose logs -f
-
-# Parar serviços
 docker compose down
 ```
 
-#### Verificar se está rodando
-
-```bash
-# Health check
-curl http://localhost:8080/health
-
-# Listar filmes
-curl http://localhost:8080/api/v1/movies
-```
-
-### Executar Localmente (sem Docker)
-
-#### 1. Iniciar MongoDB
-
-```bash
-# Docker
-docker run -d \
-  --name movies-mongo \
-  -p 27017:27017 \
-  -e MONGO_INITDB_ROOT_USERNAME=root \
-  -e MONGO_INITDB_ROOT_PASSWORD=password \
-  mongo:8.0
-```
-
-#### 2. Iniciar Movies Service
-
-```bash
-cd movies-service
-go run cmd/main.go
-```
-
-#### 3. Iniciar API Gateway
-
-```bash
-cd api-gateway
-GRPC_SERVER_URL=localhost:50051 go run cmd/main.go
-```
-
-Agora acesse: `http://localhost:8080`
-
 ---
 
-## 📁 Estrutura do Projeto
-
-```
-movies/
-├── api-gateway/                    # API Gateway (HTTP/Gin)
-│   ├── cmd/
-│   │   └── main.go                # Entry point
-│   ├── internal/
-│   │   └── handlers/
-│   │       ├── movie-handler.go    # Movie CRUD handlers
-│   │       ├── health.go           # Health check
-│   │       └── errors.go           # Error handling
-│   ├── docs/
-│   │   ├── swagger.yaml            # OpenAPI spec
-│   │   ├── swagger.json            # OpenAPI JSON
-│   │   └── docs.go                 # Swagger metadata
-│   ├── go.mod
-│   └── Dockerfile
-│
-├── movies-service/                 # Movies Service (gRPC)
-│   ├── cmd/
-│   │   └── main.go                # Entry point
-│   ├── internal/
-│   │   ├── adapters/
-│   │   │   ├── grpc_server/       # gRPC server implementation
-│   │   │   │   ├── server.go
-│   │   │   │   └── errors.go
-│   │   │   ├── mongodb/            # MongoDB adapter
-│   │   │   │   └── movie_repo.go
-│   │   │   └── seed/               # Data seeding
-│   │   │       └── seed.go
-│   │   └── core/
-│   │       ├── domain/
-│   │       │   ├── movie.go        # Movie entity
-│   │       │   └── errors.go
-│   │       ├── ports/
-│   │       │   ├── input/          # Input ports (service interface)
-│   │       │   └── output/         # Output ports (repository interface)
-│   │       └── service/
-│   │           └── movie_service.go # Business logic
-│   ├── movies.json                 # Sample data
-│   ├── go.mod
-│   └── Dockerfile
-│
-├── proto/                           # Protocol Buffer definitions
-│   ├── movies.proto                # gRPC service definition
-│   ├── movies_grpc.pb.go           # Generated gRPC code
-│   ├── movies.pb.go                # Generated message code
-│   ├── go.mod
-│   └── go.sum
-│
-├── docker-compose.yml              # Orquestração dos serviços
-├── go.work                         # Workspace do Go
-├── Dockerfile                      # Dockerfile raiz (se existir)
-├── .dockerignore                   # Docker build ignore
-├── README.md                       # Este arquivo
-└── go.work.sum
-```
-
----
-
-## 🔌 API Endpoints
-
-### Base URL
-```
-http://localhost:8080
-```
+## 🔌 Endpoints
 
 ### Health Check
 
-```http
-GET /health
-```
-
-**Resposta 200:**
-```json
-{
-  "status": "ok",
-  "service": "api-gateway"
-}
-```
-
-### Movies API (v1)
-
-#### Obter filme por ID
-
-```http
-GET /api/v1/movies/{id}
-```
-
-**Exemplo:**
 ```bash
-curl http://localhost:8080/api/v1/movies/1
+curl http://localhost:8080/health
 ```
 
-**Resposta 200:**
 ```json
-{
-  "id": 1,
-  "title": "The Shawshank Redemption",
-  "year": "1994"
-}
+{ "status": "ok", "service": "api-gateway" }
 ```
 
-#### Listar filmes
+### GET /api/v1/movies
 
-```http
-GET /api/v1/movies?title=&year=&page=&limit=&sort=
-```
+Lista filmes com suporte a filtros, paginação e ordenação.
 
-**Query Parameters:**
-- `title` (string, optional) - Buscar por título
-- `year` (string, optional) - Filtrar por ano
-- `page` (int, optional) - Número da página (padrão: 1)
-- `limit` (int, optional) - Filmes por página (padrão: 10, máximo: 100)
-- `sort` (string, optional) - Campo de ordenação: `title` ou `year` (padrão: title)
+**Parâmetros (todos opcionais):**
 
-**Exemplo:**
+| Parâmetro | Tipo   | Padrão  | Descrição                          |
+|-----------|--------|---------|------------------------------------|
+| `title`   | string | —       | Filtro por título (busca parcial)  |
+| `year`    | string | —       | Filtro por ano                     |
+| `page`    | int    | 1       | Página                             |
+| `limit`   | int    | 10      | Itens por página (máx: 100)        |
+| `sort`    | string | `title` | Campo de ordenação: `title`, `year`|
+
 ```bash
-curl "http://localhost:8080/api/v1/movies?title=The&year=1994&page=1&limit=10&sort=title"
+curl "http://localhost:8080/api/v1/movies?title=The&page=1&limit=5&sort=year"
 ```
 
-**Resposta 200:**
 ```json
 {
   "data": [
-    {
-      "id": 1,
-      "title": "The Shawshank Redemption",
-      "year": "1994"
-    }
+    { "id": 1, "title": "The Shawshank Redemption", "year": "1994" }
   ],
   "page": 1,
-  "limit": 10,
+  "limit": 5,
   "total": 1
 }
 ```
 
-#### Criar filme
+### GET /api/v1/movies/{id}
 
-```http
-POST /api/v1/movies
-Content-Type: application/json
+Busca um filme pelo ID.
 
-{
-  "title": "Inception",
-  "year": "2010"
-}
+```bash
+curl http://localhost:8080/api/v1/movies/1
 ```
 
-**Exemplo:**
+```json
+{ "id": 1, "title": "The Shawshank Redemption", "year": "1994" }
+```
+
+Erros possíveis:
+- `400 Bad Request` — ID inválido (não é número)
+- `404 Not Found` — filme não encontrado
+
+### POST /api/v1/movies
+
+Cria um novo filme de forma **assíncrona**. Publica na fila RabbitMQ e retorna `202 Accepted` imediatamente.
+
 ```bash
 curl -X POST http://localhost:8080/api/v1/movies \
   -H "Content-Type: application/json" \
   -d '{"title": "Inception", "year": "2010"}'
 ```
 
-**Resposta 201:**
 ```json
-{
-  "id": 251,
-  "title": "Inception",
-  "year": "2010"
-}
+HTTP/1.1 202 Accepted
+{ "message": "movie creation accepted" }
 ```
 
-#### Deletar filme
+> O filme será persistido em background pelo movies-service assim que consumir a mensagem da fila.
 
-```http
-DELETE /api/v1/movies/{id}
-```
+Erros possíveis:
+- `400 Bad Request` — body inválido ou campos obrigatórios ausentes
 
-**Exemplo:**
+### DELETE /api/v1/movies/{id}
+
+Remove um filme pelo ID.
+
 ```bash
 curl -X DELETE http://localhost:8080/api/v1/movies/1
 ```
 
-**Resposta 204:** (Sem corpo)
+`204 No Content` (sem body)
 
----
-
-## 📚 Documentação Swagger
-
-A API está totalmente documentada com **Swagger/OpenAPI 3.0**.
-
-### Visualizar Documentação
-
-#### Opção 1: Markdown
-
-A documentação completa da API está disponível online no repositório.
-
-#### Opção 2: Swagger UI (Local)
-
-Após rodar `swag init -g cmd/main.go` na pasta `api-gateway/`:
-
-```bash
-cd api-gateway
-go run cmd/main.go
-```
-
-Acesse: `http://localhost:8080/swagger/index.html`
-
-#### Opção 3: Editor Online
-1. Acesse https://editor.swagger.io/
-2. Cole o conteúdo de `api-gateway/docs/swagger.yaml`
-
-#### Opção 4: Postman
-
-Importe a coleção Postman disponível no repositório para testes interativos dos endpoints.
-
----
-
-## 🛠️ Desenvolvimento
-
-### Setup do Ambiente de Desenvolvimento
-
-```bash
-# 1. Clonar repositório
-git clone https://github.com/FranciscoHonorat/movies.git
-cd movies
-
-# 2. Instalar dependências
-go mod download
-
-# 3. Setup Docker (MongoDB)
-docker compose up -d mongo
-
-# 4. Rodar os serviços
-cd movies-service && go run cmd/main.go &
-cd ../api-gateway && GRPC_SERVER_URL=localhost:50051 go run cmd/main.go
-```
-
-### Modificar Proto Definitions
-
-Se alterar `proto/movies.proto`:
-
-```bash
-cd proto
-protoc --go_out=. --go-grpc_out=. movies.proto
-```
-
-### Atualizar Documentação Swagger
-
-Após adicionar/modificar anotações nos handlers:
-
-```bash
-cd api-gateway
-
-# Instalar swaggo (primeira vez)
-go install github.com/swaggo/swag/cmd/swag@latest
-
-# Gerar documentação
-swag init -g cmd/main.go
-```
-
-### Estrutura de Código
-
-#### Domain-Driven Design
-O projeto segue princípios de **Clean Architecture**:
-
-```
-├── domain/       → Entities e Rules (sem dependências)
-├── ports/        → Interfaces (input/output)
-├── service/      → Business Logic (usa ports)
-└── adapters/     → Implementações (MongoDB, gRPC)
-```
-
-#### Padrão de Handlers (API Gateway)
-
-Cada handler segue este padrão:
-1. Recebe request do Gin
-2. Valida parâmetros
-3. Chama client gRPC
-4. Trata erros e converte para HTTP
-5. Retorna JSON
+Erros possíveis:
+- `400 Bad Request` — ID inválido
+- `404 Not Found` — filme não encontrado
 
 ---
 
 ## 🧪 Testes
 
-### Rodar Testes
-
 ```bash
-# Todos os testes (recursivo)
+# Todos os testes do workspace
 go test ./...
 
 # Testes de um módulo específico
-go test ./internal/adapters/grpc_server/
+cd movies-service && go test ./...
 
 # Com cobertura
 go test -cover ./...
 
-# Com verbose
+# Verbose
 go test -v ./...
-
-# Teste específico
-go test -run TestName ./...
 ```
 
-### Estrutura de Testes
+### O que está coberto
 
-Testes estão no mesmo diretório dos arquivos originais com sufixo `_test.go`:
+- **Domain (3 testes, sem mock)** — validação de `NewMovie`, erros de título vazio, ano inválido
+- **Service (13 testes, com mock)** — todos os casos de sucesso e erro dos 4 métodos do CRUD
+- **gRPC adapter (4 testes, table-driven)** — mapeamento de domain errors para gRPC status codes
 
-```
-internal/
-├── adapters/
-│   └── grpc_server/
-│       ├── server.go
-│       └── errors_test.go       ← Testes
-└── core/
-    └── service/
-        └── movie_service.go
-```
-
-### Exemplo de Teste
-
-```go
-func TestGetMovie(t *testing.T) {
-    // Arrange
-    expected := &Movie{ID: 1, Title: "Test"}
-    
-    // Act
-    result, err := service.GetMovie(ctx, 1)
-    
-    // Assert
-    assert.NoError(t, err)
-    assert.Equal(t, expected, result)
-}
-```
+Os testes de service usam um `MockMovieRepository` que implementa a interface `output.MovieRepository`. Isso significa que os 13 testes passam sem MongoDB, DynamoDB ou qualquer banco rodando.
 
 ---
 
-## 🐳 Docker e Docker Compose
+## 📚 Swagger
 
-### Arquivos Docker
+A documentação interativa fica disponível após subir os serviços:
 
 ```
-api-gateway/Dockerfile      # Build do API Gateway
-movies-service/Dockerfile   # Build do Movies Service
-docker-compose.yml          # Orquestração
+http://localhost:8080/swagger/index.html
 ```
 
-### Variáveis de Ambiente (docker-compose)
-
-```yaml
-GRPC_SERVER_URL: movies-service:50051   # API Gateway → Movies Service
-MONGODB_URI: mongodb://root:password@mongo:27017/movies_db
-```
-
-### Comandos Úteis
+Para regenerar após alterar anotações nos handlers:
 
 ```bash
-# Build sem cache
-docker compose build --no-cache
-
-# Ver logs de um serviço
-docker compose logs -f api-gateway
-docker compose logs -f movies-service
-docker compose logs -f mongo
-
-# Executar comando em container
-docker compose exec movies-service go test ./...
-
-# Remover tudo (containers, networks, volumes)
-docker compose down -v
-
-# Rebuild e start
-docker compose up -d --build
+cd api-gateway
+swag init -g cmd/main.go
 ```
 
 ---
 
 ## ☸️ Kubernetes
 
-### Pré-requisitos
-
-- `kubectl` instalado e configurado
-- Cluster Kubernetes rodando (Docker Desktop, Minikube, Kind, etc.)
-- Imagens Docker dos serviços disponíveis (pushed para registry ou carregadas localmente)
-
-### Manifests
-
-Os manifests Kubernetes estão localizados em `k8s/`:
-
-```
-k8s/
-├── api-gateway-deployment.yaml      # Deployment do API Gateway
-├── api-gateway-service.yaml         # Service do API Gateway
-├── movies-service-deployment.yaml   # Deployment do Movies Service
-├── movies-service-service.yaml      # Service do Movies Service
-├── mongodb-deployment.yaml          # Deployment do MongoDB
-├── mongodb-service.yaml             # Service do MongoDB
-└── mongodb-pvc.yaml                 # PersistentVolumeClaim para MongoDB
-```
-
-### Deploy no Kubernetes
-
-#### 1. Aplicar todos os manifests
+Os manifestos estão em `k8s/` e foram testados com Docker Desktop (Kubernetes habilitado).
 
 ```bash
+# Buildar as imagens localmente antes de aplicar
+docker build -t api-gateway:latest -f api-gateway/Dockerfile .
+docker build -t movies-service:latest -f movies-service/Dockerfile .
+
+# Aplicar todos os manifestos
 kubectl apply -f k8s/
-```
 
-Este comando cria:
-- Deployments para API Gateway, Movies Service e MongoDB
-- Services para exposição dos serviços
-- PersistentVolumeClaim para persistência de dados do MongoDB
-
-#### 2. Verificar o status
-
-```bash
-# Ver pods
+# Verificar status
 kubectl get pods
+kubectl get services
 
-# Ver services
-kubectl get svc
-
-# Ver deployments
-kubectl get deployments
-
-# Ver volumes
-kubectl get pvc
-```
-
-#### 3. Acessar os serviços
-
-```bash
-# Port-forward API Gateway (local)
+# Acessar a API via port-forward
 kubectl port-forward svc/api-gateway 8080:8080
-
-# Port-forward MongoDB (local)
-kubectl port-forward svc/mongodb 27017:27017
-
-# Acessar Swagger
-http://localhost:8080/swagger/index.html
-
-# Acessar API
-http://localhost:8080/api/v1/movies
 ```
 
-#### 4. Ver logs
-
-```bash
-# Logs do API Gateway
-kubectl logs -l app=api-gateway -f
-
-# Logs do Movies Service
-kubectl logs -l app=movies-service -f
-
-# Logs do MongoDB
-kubectl logs -l app=mongodb -f
-```
-
-#### 5. Deletar recursos
-
-```bash
-# Remover tudo
-kubectl delete -f k8s/
-
-# Ou remover seletivamente
-kubectl delete deployment api-gateway
-kubectl delete service api-gateway
-```
-
-### Configuração de Imagens
-
-Antes de aplicar os manifests, certifique-se que as imagens estão disponíveis:
-
-```bash
-# Build das imagens
-docker build -t api-gateway:latest api-gateway/
-docker build -t movies-service:latest movies-service/
-
-# Se usar um registry (ex: Docker Hub)
-docker tag api-gateway:latest seu-usuario/api-gateway:latest
-docker push seu-usuario/api-gateway:latest
-
-docker tag movies-service:latest seu-usuario/movies-service:latest
-docker push seu-usuario/movies-service:latest
-```
-
-### Variáveis de Ambiente no Kubernetes
-
-Os Deployments usam ConfigMaps e Secrets para variáveis de ambiente:
-
-```yaml
-# Exemplo no deployment
-env:
-  - name: GRPC_SERVER_URL
-    value: "movies-service:50051"
-  - name: MONGODB_URI
-    value: "mongodb://root:password@mongodb:27017/movies_db"
-```
+Os manifestos criam Deployments e Services para api-gateway, movies-service e MongoDB, além de um PersistentVolumeClaim para persistência dos dados do MongoDB.
 
 ---
 
-## 🔍 Troubleshooting
+## 🔄 LocalStack + DynamoDB
 
-### Problema: Conexão recusada com MongoDB
+O movies-service tem dois adapters que implementam a mesma interface `MovieRepository`: um para MongoDB e outro para DynamoDB via LocalStack. Trocar entre eles exige mudar uma única linha no `main.go` — o service, o gRPC server e os testes não precisam de nenhuma alteração.
 
-**Erro:**
-```
-connection refused mongodb://root:password@mongo:27017
-```
+O LocalStack emula o DynamoDB localmente sem custo e sem necessidade de conta AWS. As credenciais configuradas no `docker-compose.yml` são fake — o LocalStack não as valida, mas o AWS SDK exige que existam.
 
-**Solução:**
-```bash
-# Verificar se MongoDB está rodando
-docker compose logs mongo
-
-# Reiniciar MongoDB
-docker compose restart mongo
-
-# Ou rodar manualmente
-docker run -d \
-  --name movies-mongo \
-  -p 27017:27017 \
-  -e MONGO_INITDB_ROOT_USERNAME=root \
-  -e MONGO_INITDB_ROOT_PASSWORD=password \
-  mongo:8.0
-```
-
-### Problema: gRPC connection refused
-
-**Erro:**
-```
-rpc error: code = Unavailable desc = connection refused
-```
-
-**Solução:**
-```bash
-# Verificar se Movies Service está rodando
-docker compose logs movies-service
-
-# Ou rodar localmente
-cd movies-service
-go run cmd/main.go
-
-# Verificar porta
-lsof -i :50051
-```
-
-### Problema: Swagger não encontrado
-
-**Erro:**
-```
-404 Not Found /swagger/index.html
-```
-
-**Solução:**
-```bash
-cd api-gateway
-swag init -g cmd/main.go
-go run cmd/main.go
-```
-
-### Problema: "no Go files" ao executar swag
-
-**Erro:**
-```
-error: execute go list command, exit status 1, stdout:, stderr:no Go files in .../api-gateway
-```
-
-**Solução:**
-```bash
-# Execute na raiz do projeto (onde está o dockerfile)
-cd api-gateway
-swag init -g cmd/main.go
-```
-
-### Problema: Erro ao conectar ao MongoDB (Docker for Desktop no Windows)
-
-**Erro:**
-```
-connection refused
-```
-
-**Solução:**
-```bash
-# Usar "host.docker.internal" ao invés de "localhost"
-# Ou usar o nome do container: "mongo"
-
-# Em docker-compose, sempre use o nome do serviço:
-mongodb://root:password@mongo:27017
-```
-
----
-
-## 📊 Monitoramento e Logs
-
-### Logs Estruturados
-
-O projeto usa `log/slog` para logging estruturado:
+O `docker-compose.yml` já inclui o container do LocalStack. Para usar o DynamoDB no lugar do MongoDB, basta trocar o adapter no `main.go` do movies-service:
 
 ```go
-slog.Error("CreateMovie error", slog.Any("error", err))
-slog.Info("Movie created", slog.Any("movie_id", id))
+// MongoDB (padrão)
+repo := mongodb.NewMongoRepository(...)
+
+// DynamoDB via LocalStack
+repo := dynamodb.NewDynamoRepository(...)
 ```
 
-### Ver Logs
+Depois rode normalmente:
 
 ```bash
-# Todos os logs
-docker compose logs
-
-# Apenas API Gateway
-docker compose logs -f api-gateway
-
-# Últimas 50 linhas
-docker compose logs --tail=50
-
-# Com timestamps
-docker compose logs -t
+docker compose up
 ```
 
 ---
 
-## 🚀 Deploy em Produção
+## 🐛 Troubleshooting
 
-### Checklist de Deploy
+**movies-service demora para ficar disponível no primeiro start**
 
-- [ ] Variáveis de ambiente configuradas (.env)
-- [ ] MongoDB backup configurado
-- [ ] TLS/HTTPS habilitado
-- [ ] Autenticação implementada (JWT)
-- [ ] Rate limiting configurado
-- [ ] CORS configurado
-- [ ] Logging centralizado
-- [ ] Monitoring e alertas
-- [ ] CI/CD pipeline
-- [ ] Documentação atualizada
+O seed popula o banco sincronamente antes do servidor gRPC iniciar. Com 250 filmes no DynamoDB (um `PutItem` por vez), isso pode levar alguns segundos. Os logs mostram `PutItem => 200` enquanto o seed roda — é comportamento esperado.
 
-### Sugestões para Produção
+**EOF durante `docker compose up --build`**
 
-```dockerfile
-# Usar multi-stage build
-FROM golang:1.25 AS builder
-# ... build
-
-FROM alpine:latest
-# ... runtime
+Buildar os serviços separadamente resolve:
+```bash
+docker compose build movies-service
+docker compose build api-gateway
+docker compose up
 ```
 
----
+**Pods com `ErrImageNeverPull` no Kubernetes**
 
-## 🤝 Contribuindo
+As imagens precisam ser buildadas localmente antes de aplicar os manifestos:
+```bash
+docker build -t api-gateway:latest -f api-gateway/Dockerfile .
+docker build -t movies-service:latest -f movies-service/Dockerfile .
+kubectl rollout restart deployment/api-gateway deployment/movies-service
+```
 
-### Steps para Contribuir
+**LocalStack falhando com `License activation failed`**
 
-1. Fork o repositório
-2. Criar feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Abrir Pull Request
-
-### Padrões de Código
-
-- Seguir `gofmt` para formatação
-- Adicionar testes para novas funcionalidades
-- Atualizar documentação
-- Adicionar anotações Swagger para novos endpoints
+O `docker-compose.yml` já usa `localstack/localstack:3.8`. Versões mais recentes exigem licença paga — não altere a tag.
 
 ---
 
-## 📞 Contato e Suporte
+## 📞 Contato
 
 - **Email**: jeffhonorato230@gmail.com
-- **GitHub Issues**: [Abrir issue](https://github.com/FranciscoHonorat/movies/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/FranciscoHonorat/movies/discussions)
+- **GitHub**: [github.com/FranciscoHonorat](https://github.com/FranciscoHonorat)
 
 ---
 
-## 🙏 Agradecimentos
-
-- [Gin Web Framework](https://github.com/gin-gonic/gin)
-- [gRPC](https://grpc.io/)
-- [MongoDB Go Driver](https://github.com/mongodb/mongo-go-driver)
-- [Swagger/OpenAPI](https://swagger.io/)
-
----
-
-## 📚 Recursos Adicionais
-
-### Documentação
-
-A documentação completa da API está disponível no repositório, incluindo detalhes de todos os endpoints, parâmetros e exemplos de uso.
-
-### Ferramentas Recomendadas
-- [Postman](https://www.postman.com/) - Testes de API
-- [MongoDB Compass](https://www.mongodb.com/products/compass) - Visualizador MongoDB
-- [VS Code REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) - Testes inline
-- [Insomnia](https://insomnia.rest/) - Cliente REST alternativo
-
-### Cursos e Tutoriais
-- [Go by Example](https://gobyexample.com/)
-- [Protocol Buffers Guide](https://developers.google.com/protocol-buffers)
-- [gRPC Concepts](https://grpc.io/docs/what-is-grpc/)
-- [MongoDB University](https://university.mongodb.com/)
-
----
-
-**Última atualização**: 24 de Maio de 2026  
-**Versão da API**: 1.0.0  
-**Versão Go**: 1.25.0  
-**Status**: ✅ Pronto para uso
+**Versão Go**: 1.25.0 | **Versão da API**: 1.0.0
